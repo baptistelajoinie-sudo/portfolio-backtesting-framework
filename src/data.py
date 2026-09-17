@@ -1,151 +1,107 @@
 import pandas as pd
 import yfinance as yf
+import requests
+from io import StringIO
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-# Fixed CAC 40 universe used for the project.
-#
-# IMPORTANT:
-# This is a current fixed universe, not a point-in-time
-# historical universe. Therefore, the backtest is subject
-# to survivorship bias.
-CAC40_TICKERS = [
-    "AC.PA",       # Accor
-    "AI.PA",       # Air Liquide
-    "AIR.PA",      # Airbus
-    "MT.AS",       # ArcelorMittal
-    "CS.PA",       # AXA
-    "BNP.PA",      # BNP Paribas
-    "EN.PA",       # Bouygues
-    "BVI.PA",      # Bureau Veritas
-    "CAP.PA",      # Capgemini
-    "CA.PA",       # Carrefour
-    "ACA.PA",      # Credit Agricole
-    "BN.PA",       # Danone
-    "DSY.PA",      # Dassault Systemes
-    "FGR.PA",      # Eiffage
-    "ENGI.PA",     # Engie
-    "EL.PA",       # EssilorLuxottica
-    "ERF.PA",      # Eurofins Scientific
-    "ENX.PA",      # Euronext
-    "RMS.PA",      # Hermes
-    "KER.PA",      # Kering
-    "OR.PA",       # L'Oreal
-    "LR.PA",       # Legrand
-    "MC.PA",       # LVMH
-    "ML.PA",       # Michelin
-    "ORA.PA",      # Orange
-    "RI.PA",       # Pernod Ricard
-    "PUB.PA",      # Publicis
-    "RNO.PA",      # Renault
-    "SAF.PA",      # Safran
-    "SGO.PA",      # Saint-Gobain
-    "SAN.PA",      # Sanofi
-    "SU.PA",       # Schneider Electric
-    "GLE.PA",      # Societe Generale
-    "STLAP.PA",    # Stellantis
-    "STMPA.PA",    # STMicroelectronics
-    "HO.PA",       # Thales
-    "TTE.PA",      # TotalEnergies
-    "URW.PA",      # Unibail-Rodamco-Westfield
-    "VIE.PA",      # Veolia
-    "DG.PA",       # Vinci
-]
-
-# CAC 40 official index used as an external benchmark.
-CAC40_BENCHMARK = "^FCHI"
-
-# Backtest period.
 START_DATE = "2015-01-01"
 END_DATE = "2026-01-01"
 
-# Minimum proportion of available observations required
-# for an asset to be included in the backtest universe.
+SP500_BENCHMARK = "^GSPC"
+
 MIN_COVERAGE = 0.95
 
 
 # ============================================================
-# DATA DOWNLOAD
+# S&P 500 UNIVERSE
 # ============================================================
 
-def download_prices(tickers, start_date, end_date):
+def get_sp500_tickers():
     """
-    Download historical adjusted closing prices.
+    Retrieve the current S&P 500 constituent list.
 
-    The function first attempts a batch download.
-    Tickers for which the entire series is missing are
-    then retried individually.
-
-    Parameters
-    ----------
-    tickers : list
-        Yahoo Finance tickers.
-    start_date : str
-        Start date in YYYY-MM-DD format.
-    end_date : str
-        End date in YYYY-MM-DD format.
-
-    Returns
-    -------
-    pd.DataFrame
-        Historical adjusted closing prices.
+    IMPORTANT
+    ---------
+    This uses the current constituent universe and therefore
+    introduces survivorship bias in the historical backtest.
     """
 
-    prices = yf.download(
+    url = (
+        "https://en.wikipedia.org/wiki/"
+        "List_of_S%26P_500_companies"
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        )
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=30,
+    )
+
+    response.raise_for_status()
+
+    tables = pd.read_html(
+        StringIO(response.text)
+    )
+
+    constituents = tables[0]
+
+    tickers = (
+        constituents["Symbol"]
+        .astype(str)
+        .tolist()
+    )
+
+    # Yahoo Finance convention:
+    # BRK.B -> BRK-B
+    tickers = [
+        ticker.replace(".", "-")
+        for ticker in tickers
+    ]
+
+    return tickers
+
+
+# ============================================================
+# PRICE DATA
+# ============================================================
+
+def download_prices(
+    tickers,
+    start_date=START_DATE,
+    end_date=END_DATE,
+):
+    """
+    Download adjusted historical closing prices.
+    """
+
+    data = yf.download(
         tickers,
         start=start_date,
         end=end_date,
         auto_adjust=True,
         progress=False,
-    )["Close"]
+        group_by="column",
+        threads=True,
+    )
 
-    # Make sure we always work with a DataFrame.
+    prices = data["Close"]
+
     if isinstance(prices, pd.Series):
         prices = prices.to_frame()
-
-    failed_tickers = []
-
-    # Identify tickers that completely failed in the batch download.
-    for ticker in tickers:
-        if ticker not in prices.columns or prices[ticker].isna().all():
-            failed_tickers.append(ticker)
-
-    # Retry failed tickers individually.
-    for ticker in failed_tickers:
-
-        print(f"Retrying {ticker} individually...")
-
-        individual_data = yf.download(
-            ticker,
-            start=start_date,
-            end=end_date,
-            auto_adjust=True,
-            progress=False,
-        )["Close"]
-
-        if isinstance(individual_data, pd.DataFrame):
-
-            if ticker in individual_data.columns:
-                individual_data = individual_data[ticker]
-            else:
-                individual_data = individual_data.squeeze()
-
-        if individual_data.notna().any():
-
-            prices[ticker] = individual_data
-
-            print(
-                f"{ticker}: individual download successful."
-            )
-
-        else:
-
-            print(
-                f"{ticker}: no usable data found."
-            )
 
     return prices
 
@@ -154,118 +110,61 @@ def download_prices(tickers, start_date, end_date):
 # DATA QUALITY
 # ============================================================
 
-def check_missing_values(prices):
-    """
-    Count missing observations for each asset.
-
-    Parameters
-    ----------
-    prices : pd.DataFrame
-        Historical price data.
-
-    Returns
-    -------
-    pd.Series
-        Number of missing observations per ticker.
-    """
-
-    return prices.isna().sum()
-
-
-def data_availability_report(prices):
-    """
-    Build a data availability report for each asset.
-
-    Parameters
-    ----------
-    prices : pd.DataFrame
-        Historical price data.
-
-    Returns
-    -------
-    pd.DataFrame
-        Report containing:
-        - first valid date
-        - last valid date
-        - missing observations
-        - available observations
-        - coverage ratio
-    """
-
-    total_observations = len(prices)
-
-    report = pd.DataFrame({
-        "first_valid_date": prices.apply(
-            lambda x: x.first_valid_index()
-        ),
-        "last_valid_date": prices.apply(
-            lambda x: x.last_valid_index()
-        ),
-        "missing_values": prices.isna().sum(),
-        "observations": prices.notna().sum(),
-    })
-
-    report["coverage"] = (
-        report["observations"]
-        / total_observations
-    )
-
-    return report
-
-
-# ============================================================
-# ASSET ELIGIBILITY
-# ============================================================
-
 def select_eligible_assets(
     prices,
-    min_coverage=MIN_COVERAGE
+    min_coverage=MIN_COVERAGE,
 ):
     """
-    Select assets with sufficient historical coverage.
-
-    Parameters
-    ----------
-    prices : pd.DataFrame
-        Historical price data.
-    min_coverage : float
-        Minimum required coverage ratio.
-
-    Returns
-    -------
-    list
-        Tickers satisfying the coverage requirement.
+    Keep assets with sufficient historical price coverage.
     """
 
-    report = data_availability_report(prices)
+    coverage = (
+        prices.notna().mean()
+    )
 
-    eligible_assets = report.index[
-        report["coverage"] >= min_coverage
-    ].tolist()
+    eligible_assets = (
+        coverage[
+            coverage >= min_coverage
+        ]
+        .index
+        .tolist()
+    )
 
     return eligible_assets
+
+
+def clean_prices(
+    prices,
+    eligible_assets,
+):
+    """
+    Keep eligible assets and forward-fill isolated
+    missing observations.
+    """
+
+    cleaned = (
+        prices[
+            eligible_assets
+        ]
+        .copy()
+    )
+
+    cleaned = cleaned.ffill()
+
+    return cleaned
 
 
 # ============================================================
 # RETURNS
 # ============================================================
 
-def calculate_returns(prices):
+def calculate_returns(
+    prices,
+):
     """
-    Calculate daily simple returns from adjusted prices.
+    Calculate daily simple returns.
 
-    Formula:
-        r_t = P_t / P_(t-1) - 1
-
-    Parameters
-    ----------
-    prices : pd.DataFrame
-        Historical adjusted closing prices.
-
-    Returns
-    -------
-    pd.DataFrame
-        Daily simple returns.
+    r_t = P_t / P_(t-1) - 1
     """
 
     returns = prices.pct_change(
@@ -276,130 +175,38 @@ def calculate_returns(prices):
 
 
 # ============================================================
-# TEST PIPELINE
+# S&P 500 BENCHMARK
 # ============================================================
 
-if __name__ == "__main__":
+def download_benchmark(
+    ticker=SP500_BENCHMARK,
+    start_date=START_DATE,
+    end_date=END_DATE,
+):
+    """
+    Download S&P 500 benchmark prices and daily returns.
+    """
 
-    # --------------------------------------------------------
-    # 1. Download prices
-    # --------------------------------------------------------
-
-    prices = download_prices(
-        CAC40_TICKERS,
-        START_DATE,
-        END_DATE,
+    data = yf.download(
+        ticker,
+        start=start_date,
+        end=end_date,
+        auto_adjust=True,
+        progress=False,
     )
 
-    print()
-    print("=" * 60)
-    print("PRICE DATA")
-    print("=" * 60)
+    prices = data["Close"]
 
-    print(prices.head())
-
-    print()
-    print("Dataset shape:")
-    print(prices.shape)
-
-    # --------------------------------------------------------
-    # 2. Missing values
-    # --------------------------------------------------------
-
-    missing = check_missing_values(prices)
-
-    print()
-    print("=" * 60)
-    print("MISSING VALUES")
-    print("=" * 60)
-
-    print(missing)
-
-    # --------------------------------------------------------
-    # 3. Data availability
-    # --------------------------------------------------------
-
-    availability = data_availability_report(prices)
-
-    print()
-    print("=" * 60)
-    print("DATA AVAILABILITY REPORT")
-    print("=" * 60)
-
-    print(availability.to_string())
-
-    # --------------------------------------------------------
-    # 4. Select eligible assets
-    # --------------------------------------------------------
-
-    eligible_assets = select_eligible_assets(
+    if isinstance(
         prices,
-        min_coverage=MIN_COVERAGE,
+        pd.DataFrame,
+    ):
+        prices = prices.iloc[:, 0]
+
+    returns = prices.pct_change(
+        fill_method=None
     )
 
-    print()
-    print("=" * 60)
-    print("ELIGIBLE ASSETS")
-    print("=" * 60)
+    returns.name = "S&P 500"
 
-    print(eligible_assets)
-
-    print()
-    print(
-        f"Number of eligible assets: "
-        f"{len(eligible_assets)} / "
-        f"{len(CAC40_TICKERS)}"
-    )
-
-    # --------------------------------------------------------
-    # 5. Identify excluded assets
-    # --------------------------------------------------------
-
-    excluded_assets = [
-        ticker
-        for ticker in CAC40_TICKERS
-        if ticker not in eligible_assets
-    ]
-
-    print()
-    print("=" * 60)
-    print("EXCLUDED ASSETS")
-    print("=" * 60)
-
-    print(excluded_assets)
-
-    # --------------------------------------------------------
-    # 6. Keep only eligible assets
-    # --------------------------------------------------------
-
-    clean_prices = prices[eligible_assets].copy()
-
-    print()
-    print("=" * 60)
-    print("CLEAN PRICE DATA")
-    print("=" * 60)
-
-    print(clean_prices.head())
-
-    print()
-    print("Clean dataset shape:")
-    print(clean_prices.shape)
-
-    # --------------------------------------------------------
-    # 7. Calculate daily returns
-    # --------------------------------------------------------
-
-    returns = calculate_returns(
-        clean_prices
-    )
-
-    print()
-    print("=" * 60)
-    print("DAILY RETURNS")
-    print("=" * 60)
-
-    print(returns.head())
-
-    print()
-    print("Returns shape:")
-    print(returns.shape)
+    return prices, returns
