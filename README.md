@@ -12,9 +12,7 @@ The framework compares three systematic allocation approaches:
 
 Each eligible stock receives the same target allocation:
 
-\[
-w_i = \frac{1}{N}
-\]
+$$w_i = \frac{1}{N}$$
 
 This provides a simple diversification baseline independent of market capitalization or estimated risk.
 
@@ -22,9 +20,7 @@ This provides a simple diversification baseline independent of market capitaliza
 
 Portfolio weights are inversely proportional to each asset's historical volatility:
 
-\[
-w_i \propto \frac{1}{\sigma_i}
-\]
+$$w_i \propto \frac{1}{\sigma_i}$$
 
 Lower-volatility assets therefore receive larger allocations.
 
@@ -58,7 +54,7 @@ At each rebalance, strategy weights are estimated using only observations preced
 | Risk Parity | 15.69% | 18.12% | 0.87 | -38.16% |
 | S&P 500 | 12.88% | 18.13% | 0.71 | -33.92% |
 
-The reported Sharpe ratios currently use a 0% risk-free-rate assumption.
+The reported Sharpe ratios currently use a **0% risk-free-rate assumption**.
 
 These results should be interpreted as a demonstration of the backtesting framework rather than evidence of investable outperformance. See **Limitations** below.
 
